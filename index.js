@@ -1,4 +1,4 @@
-
+```javascript
 const TelegramBot = require('node-telegram-bot-api');
 const mysql = require('mysql2/promise');
 
@@ -24,7 +24,7 @@ const COOLDOWN = 4 * 60 * 1000;
 const XP_REWARD = 15;
 const MAX_LEVEL = 100;
 
-// XP لازم برای رفتن از لول فعلی به لول بعدی
+// XP موردنیاز برای رفتن از لول فعلی به لول بعدی
 function xpRequired(level) {
   if (level >= MAX_LEVEL) return 0;
 
@@ -35,8 +35,6 @@ function xpRequired(level) {
   if (level === 9) return 6500;
   if (level === 10) return 8000;
 
-  // بعد از لول ۱۱، مقدار XP هر مرحله
-  // به ترتیب ۲۰۰۰، ۲۵۰۰، ۳۰۰۰ و ... بیشتر می‌شود.
   let required = 8000;
 
   for (let current = 10; current < level; current++) {
@@ -46,7 +44,7 @@ function xpRequired(level) {
   return required;
 }
 
-// رنک مخصوص هر بازه لول
+// رنک‌ها
 function getRank(level) {
   if (level >= 100) return '👑 فرمانروای چاقال';
   if (level >= 91) return '🌌 تایتان';
@@ -137,6 +135,7 @@ bot.onText(/^\/start(?:@\w+)?$/, async (msg) => {
   }
 });
 
+// مدیریت پیام‌های گروه
 bot.on('message', async (msg) => {
   if (!msg.text || !msg.from || msg.from.is_bot) return;
 
@@ -150,11 +149,10 @@ bot.on('message', async (msg) => {
   const username = msg.from.username || name;
 
   try {
-    // نمایش موجودی
+    // موجودی
     if (text === 'موجودی') {
       const [rows] = await db.execute(
-        `SELECT balance FROM chaghal_players
-         WHERE user_id = ?`,
+        `SELECT balance FROM chaghal_players WHERE user_id = ?`,
         [userId]
       );
 
@@ -179,8 +177,7 @@ bot.on('message', async (msg) => {
     // نمایش لول و XP
     if (text === 'لول') {
       const [rows] = await db.execute(
-        `SELECT level, xp FROM chaghal_players
-         WHERE user_id = ?`,
+        `SELECT level, xp FROM chaghal_players WHERE user_id = ?`,
         [userId]
       );
 
@@ -199,6 +196,7 @@ bot.on('message', async (msg) => {
           `━━━━━━━━━━━━━━━━━━━`,
           { reply_to_message_id: msg.message_id }
         );
+
         return;
       }
 
@@ -210,7 +208,7 @@ bot.on('message', async (msg) => {
 
       const filled = Math.floor(percent / 10);
       const bar = '🟩'.repeat(filled) +
-                  '⬜'.repeat(10 - filled);
+        '⬜'.repeat(10 - filled);
 
       await bot.sendMessage(
         msg.chat.id,
@@ -228,11 +226,10 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // نمایش رنک اختصاصی بر اساس لول
+    // نمایش رنک
     if (text === 'رنک') {
       const [rows] = await db.execute(
-        `SELECT level, xp FROM chaghal_players
-         WHERE user_id = ?`,
+        `SELECT level, xp FROM chaghal_players WHERE user_id = ?`,
         [userId]
       );
 
@@ -253,9 +250,10 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // فقط پیام دقیق «چاق» پاداش می‌گیرد.
+    // کسب سکه با دستور چاق
     if (text !== 'چاق') return;
 
+    // بازیکن جدید بدون حذف اطلاعات بازیکنان قبلی
     await db.execute(
       `INSERT IGNORE INTO chaghal_players
        (user_id, username, balance, last_chag_at, level, xp)
@@ -276,10 +274,15 @@ bot.on('message', async (msg) => {
         [userId]
       );
 
+      if (!rows.length) {
+        throw new Error('Player record not found');
+      }
+
       const player = rows[0];
       const now = Date.now();
       const elapsed = now - Number(player.last_chag_at);
 
+      // محدودیت چهار دقیقه‌ای
       if (elapsed < COOLDOWN) {
         await conn.rollback();
 
@@ -334,8 +337,7 @@ bot.on('message', async (msg) => {
       );
 
       const [updated] = await conn.execute(
-        `SELECT balance FROM chaghal_players
-         WHERE user_id = ?`,
+        `SELECT balance FROM chaghal_players WHERE user_id = ?`,
         [userId]
       );
 
@@ -395,6 +397,7 @@ async function start() {
 }
 
 start();
+```
 
 }
 
