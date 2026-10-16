@@ -35,8 +35,8 @@ function xpRequired(level) {
   if (level === 9) return 6500;
   if (level === 10) return 8000;
 
-  // از لول ۱۱ به بعد، مقدار لازم هر مرحله
-  // به ترتیب ۲۰۰۰، ۲۵۰۰، ۳۰۰۰ و ... افزایش می‌یابد.
+  // بعد از لول ۱۱، مقدار XP هر مرحله
+  // به ترتیب ۲۰۰۰، ۲۵۰۰، ۳۰۰۰ و ... بیشتر می‌شود.
   let required = 8000;
 
   for (let current = 10; current < level; current++) {
@@ -44,6 +44,32 @@ function xpRequired(level) {
   }
 
   return required;
+}
+
+// رنک مخصوص هر بازه لول
+function getRank(level) {
+  if (level >= 100) return '👑 فرمانروای چاقال';
+  if (level >= 91) return '🌌 تایتان';
+  if (level >= 81) return '⚡ اسطوره';
+  if (level >= 71) return '🐉 افسانه‌ای';
+  if (level >= 61) return '💰 سرمایه‌دار';
+  if (level >= 51) return '👑 رئیس';
+  if (level >= 41) return '🔥 استاد';
+  if (level >= 31) return '💎 نخبه';
+  if (level >= 21) return '🥇 حرفه‌ای';
+  if (level >= 11) return '🥈 تلاشگر';
+  if (level >= 6) return '🥉 مبتدی';
+  return '🪶 تازه‌وارد';
+}
+
+function playerName(user) {
+  return [user.first_name, user.last_name]
+    .filter(Boolean)
+    .join(' ') || 'بازیکن';
+}
+
+function formatNumber(value) {
+  return Number(value || 0).toLocaleString('en-US');
 }
 
 const WELCOME = `🦆 به دنیای چاقال خوش اومدی! 💸
@@ -69,16 +95,6 @@ https://t.me/ChaghalCity
 
 💚 آماده‌ای وارد دنیای چاقال بشی؟`;
 
-function playerName(user) {
-  return [user.first_name, user.last_name]
-    .filter(Boolean)
-    .join(' ') || 'بازیکن';
-}
-
-function formatNumber(value) {
-  return Number(value || 0).toLocaleString('en-US');
-}
-
 async function setupDatabase() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS chaghal_players (
@@ -89,7 +105,6 @@ async function setupDatabase() {
     )
   `);
 
-  // ستون‌های جدید را بدون پاک کردن اطلاعات قبلی اضافه می‌کنیم.
   const [columns] = await db.query(
     'SHOW COLUMNS FROM chaghal_players'
   );
@@ -113,7 +128,7 @@ async function setupDatabase() {
   console.log('🦆 Chaghal MySQL connected; level system ready!');
 }
 
-// پیام خوش‌آمدگویی در پیوی
+// خوش‌آمدگویی در پیوی
 bot.onText(/^\/start(?:@\w+)?$/, async (msg) => {
   try {
     await bot.sendMessage(msg.chat.id, WELCOME);
@@ -161,7 +176,7 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // نمایش لول و پیشرفت XP
+    // نمایش لول و XP
     if (text === 'لول') {
       const [rows] = await db.execute(
         `SELECT level, xp FROM chaghal_players
@@ -175,9 +190,13 @@ bot.on('message', async (msg) => {
       if (level >= MAX_LEVEL) {
         await bot.sendMessage(
           msg.chat.id,
-          `👑 لول ${MAX_LEVEL} — بالاترین لول چاقال!\n` +
-          `⭐️ XP: ${formatNumber(xp)}\n` +
-          `🏆 تو به آخرین لول رسیدی!`,
+          `👑 ${name} به بالاترین لول رسید!\n` +
+          `━━━━━━━━━━━━━━━━━━━\n` +
+          `⭐️ لول: 100\n` +
+          `✨ XP: ${formatNumber(xp)}\n` +
+          `🎖 رنک: ${getRank(100)}\n` +
+          `🏆 بالاترین لول چاقال!\n` +
+          `━━━━━━━━━━━━━━━━━━━`,
           { reply_to_message_id: msg.message_id }
         );
         return;
@@ -195,8 +214,10 @@ bot.on('message', async (msg) => {
 
       await bot.sendMessage(
         msg.chat.id,
-        `⭐️ لول ${level} | ${name}\n` +
+        `⭐️ وضعیت لول ${name}\n` +
         `━━━━━━━━━━━━━━━━━━━\n` +
+        `🎖 رنک: ${getRank(level)}\n` +
+        `⭐️ لول: ${level}\n` +
         `✨ XP: ${formatNumber(xp)} / ${formatNumber(required)}\n` +
         `${bar} ${percent}%\n` +
         `🎯 XP باقی‌مانده: ${formatNumber(required - xp)}\n` +
@@ -207,7 +228,7 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // نمایش رتبه بازیکن
+    // نمایش رنک اختصاصی بر اساس لول
     if (text === 'رنک') {
       const [rows] = await db.execute(
         `SELECT level, xp FROM chaghal_players
@@ -218,25 +239,13 @@ bot.on('message', async (msg) => {
       const level = rows.length ? Number(rows[0].level) : 1;
       const xp = rows.length ? Number(rows[0].xp) : 0;
 
-      const [rankRows] = await db.execute(
-        `SELECT COUNT(*) + 1 AS player_rank
-         FROM chaghal_players
-         WHERE level > ?
-            OR (level = ? AND xp > ?)`,
-        [level, level, xp]
-      );
-
-      const [countRows] = await db.query(
-        'SELECT COUNT(*) AS total FROM chaghal_players'
-      );
-
       await bot.sendMessage(
         msg.chat.id,
-        `🏆 رتبه ${name}\n` +
+        `🏆 رنک ${name}\n` +
         `━━━━━━━━━━━━━━━━━━━\n` +
         `⭐️ لول: ${level}\n` +
         `✨ XP: ${formatNumber(xp)}\n` +
-        `🥇 رتبه: ${formatNumber(rankRows[0].player_rank)} از ${formatNumber(countRows[0].total)}\n` +
+        `🎖 رنک: ${getRank(level)}\n` +
         `━━━━━━━━━━━━━━━━━━━`,
         { reply_to_message_id: msg.message_id }
       );
@@ -271,7 +280,6 @@ bot.on('message', async (msg) => {
       const now = Date.now();
       const elapsed = now - Number(player.last_chag_at);
 
-      // کول‌داون مشترک برای بازیکن در همه گروه‌ها
       if (elapsed < COOLDOWN) {
         await conn.rollback();
 
@@ -299,7 +307,6 @@ bot.on('message', async (msg) => {
       let levelUps = 0;
       let gainedXP = 0;
 
-      // لول ۱۰۰ آخرین لول است.
       if (level < MAX_LEVEL) {
         xp += XP_REWARD;
         gainedXP = XP_REWARD;
@@ -339,13 +346,15 @@ bot.on('message', async (msg) => {
         `💸 سکه گرفتی: +${reward}\n` +
         `✨ XP گرفتی: +${gainedXP}\n` +
         `⭐️ لول فعلی: ${level}\n` +
+        `🎖 رنک: ${getRank(level)}\n` +
         `💰 موجودی کل: ${formatNumber(updated[0].balance)} سکه\n` +
         `⏳ دریافت بعدی: ۴ دقیقه دیگه`;
 
       if (levelUps > 0) {
         reply +=
           `\n\n🎉 تبریک! ${levelUps} لول ارتقا گرفتی!\n` +
-          `🏆 لول جدیدت: ${level}`;
+          `🏆 لول جدیدت: ${level}\n` +
+          `🎖 رنک جدید: ${getRank(level)}`;
       }
 
       if (level >= MAX_LEVEL) {
@@ -383,6 +392,10 @@ async function start() {
     console.error('Startup failed:', err.message);
     process.exit(1);
   }
+}
+
+start();
+
 }
 
 start();
