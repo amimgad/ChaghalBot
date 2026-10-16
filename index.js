@@ -79,21 +79,34 @@ bot.on('message', async (msg) => {
     'Player';
 
   try {
-    if (text === 'موجودی') {
-      const [rows] = await db.execute(
-        'SELECT balance FROM chaghal_players WHERE user_id = ?',
-        [userId]
-      );
+    
+if (text === 'موجودی') {
+  const [rows] = await db.execute(
+    'SELECT balance FROM chaghal_players WHERE user_id = ?',
+    [userId]
+  );
 
-      const balance = rows.length ? rows[0].balance : 0;
+  const balance = rows.length ? rows[0].balance : 0;
+  const name = [msg.from.first_name, msg.from.last_name]
+    .filter(Boolean)
+    .join(' ');
 
-      await bot.sendMessage(
-        msg.chat.id,
-        `💰 موجودی ${msg.from.first_name || 'بازیکن'}: ${balance} سکه`,
-        { reply_to_message_id: msg.message_id }
-      );
-      return;
-    }
+  const message =
+    `💰 **موجودی ${name || 'بازیکن'}**\n` +
+    `━━━━━━━━━━━━━━━━━━━\n` +
+    `🦆 **پول:** ${balance} سکه\n` +
+    `🏦 **سپرده بانک:** فعلاً 0\n` +
+    `⭐️ **اشتراک:** فعلاً بدون اشتراک\n` +
+    `━━━━━━━━━━━━━━━━━━━`;
+
+  await bot.sendMessage(msg.chat.id, message, {
+    reply_to_message_id: msg.message_id,
+    parse_mode: 'Markdown'
+  });
+
+  return;
+}
+
 
     if (text !== 'چاق') return;
 
