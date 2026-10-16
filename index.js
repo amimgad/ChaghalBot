@@ -20,6 +20,9 @@ const bot = new TelegramBot(token, { polling: false });
 
 const CHAG_COOLDOWN = 4 * 60 * 1000;
 const WORK_COOLDOWN = 60 * 1000;
+const DAILY_COOLDOWN = 24 * 60 * 60 * 1000;
+const WHEEL_COOLDOWN = 60 * 60 * 1000;
+
 const CHAG_XP = 15;
 const JOB_XP = 20;
 const MAX_LEVEL = 100;
@@ -118,6 +121,17 @@ function progressBar(xp, required) {
   return "🟩".repeat(filled) + "⬜".repeat(10 - filled);
 }
 
+function formatRemaining(ms) {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) return `${hours} ساعت و ${minutes} دقیقه`;
+  if (minutes > 0) return `${minutes} دقیقه و ${seconds} ثانیه`;
+  return `${seconds} ثانیه`;
+}
+
 async function setupDatabase() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS chaghal_players (
@@ -129,18 +143,23 @@ async function setupDatabase() {
       xp BIGINT NOT NULL DEFAULT 0,
       job_id INT DEFAULT NULL,
       last_work_at BIGINT NOT NULL DEFAULT 0,
-      bank_balance BIGINT NOT NULL DEFAULT 0
+      bank_balance BIGINT NOT NULL DEFAULT 0,
+      last_daily_at BIGINT NOT NULL DEFAULT 0,
+      last_wheel_at BIGINT NOT NULL DEFAULT 0
     )
   `);
 
-  // فقط ستون‌های لازم اضافه می‌شوند؛ داده‌های قبلی حفظ می‌شوند.
+  // ستون‌های جدید به جدول موجود اضافه می‌شوند.
+  // ستون‌ها و داده‌های قبلی حذف یا بازنشانی نمی‌شوند.
   const columns = [
     ["level", "INT NOT NULL DEFAULT 1"],
     ["xp", "BIGINT NOT NULL DEFAULT 0"],
     ["job_id", "INT DEFAULT NULL"],
     ["last_chag_at", "BIGINT NOT NULL DEFAULT 0"],
     ["last_work_at", "BIGINT NOT NULL DEFAULT 0"],
-    ["bank_balance", "BIGINT NOT NULL DEFAULT 0"]
+    ["bank_balance", "BIGINT NOT NULL DEFAULT 0"],
+    ["last_daily_at", "BIGINT NOT NULL DEFAULT 0"],
+    ["last_wheel_at", "BIGINT NOT NULL DEFAULT 0"]
   ];
 
   for (const [name, definition] of columns) {
@@ -241,8 +260,9 @@ async function showProfile(chatId, user) {
   const level = Number(player.level) || 1;
   const xp = Number(player.xp) || 0;
   const needed = xpRequired(level);
-  const username = user.username ? `@${user.username}` :
-    (user.first_name || "بازیکن");
+  const username = user.username
+    ? `@${user.username}`
+    : (user.first_name || "بازیکن");
 
   const currentJob = jobs.find(
     job => job.id === Number(player.job_id)
@@ -427,6 +447,100 @@ async function doChag(chatId, user) {
   await notifyLevelUp(chatId, updated);
 }
 
+// پاداش روزانه و چرخ شانس
+async function claimTimedReward(chatId, user, type) {
+  const configs = {
+    daily: {
+      column: "last_daily_at",
+      cooldown: DAILY_COOLDOWN,
+      min: 20,
+      max: 100,
+      title: "🎁 پاداش روزانه",
+      nextText: "۲۴ ساعت دیگه"
+    },
+    wheel: {
+      column: "last_wheel_at",
+      cooldown: WHEEL_COOLDOWN,
+      min: 20,
+      max: 500,
+      title: "🎡 چرخ شانس",
+      nextText: "یک ساعت دیگه"
+    }
+  };
+
+  const config = configs[type];
+  if (!config) return;
+
+  await getPlayer(user);
+
+  const now = Date.now();
+  const coins =
+    Math.floor(Math.random() * (config.max - config.min + 1)) +
+    config.min;
+
+  // UPDATE اتمیک است؛ درخواست هم‌زمان دوم نمی‌تواند جایزه بگیرد.
+  const [result] = await pool.query(
+    `UPDATE chaghal_players
+     SET balance = balance + ?, ${config.column} = ?
+     WHERE user_id = ?
+       AND ${config.column} <= ?`,
+    [
+      coins,
+      now,
+      String(user.id),
+      now - config.cooldown
+    ]
+  );
+
+  if (!result.affectedRows) {
+    const [rows] = await pool.query(
+      `SELECT ${config.column} AS last_at
+       FROM chaghal_players
+       WHERE user_id = ?`,
+      [String(user.id)]
+    );
+
+    const last = Number(rows[0]?.last_at) || 0;
+    const remaining = config.cooldown - (now - last);
+
+    return bot.sendMessage(
+      chatId,
+      [
+        config.title,
+        "",
+        "⏳ داش، هنوز وقت جایزه‌ات نرسیده!",
+        `⏰ زمان باقی‌مانده: ${formatRemaining(remaining)}`
+      ].join("\n")
+    );
+  }
+
+  const [rows] = await pool.query(
+    "SELECT balance FROM chaghal_players WHERE user_id = ?",
+    [String(user.id)]
+  );
+
+  return bot.sendMessage(
+    chatId,
+    [
+      config.title,
+      "",
+      `🎉 تبریک داش! ${fmt(coins)} سکه برنده شدی!`,
+      "",
+      `💰 پول فعلی: ${fmt(rows[0].balance)} سکه`,
+      "",
+      `⏰ جایزه بعدی ${config.nextText} آماده می‌شه.`
+    ].join("\n")
+  );
+}
+
+async function doDailyReward(chatId, user) {
+  return claimTimedReward(chatId, user, "daily");
+}
+
+async function doLuckyWheel(chatId, user) {
+  return claimTimedReward(chatId, user, "wheel");
+}
+
 async function doWork(chatId, user) {
   const player = await getPlayer(user);
   const job = jobs.find(item => item.id === Number(player.job_id));
@@ -571,6 +685,20 @@ bot.on("message", async message => {
         chatId,
         `🏆 رتبه شما: ${getRank(Number(player.level))}`
       );
+    }
+
+    if (
+      text === "پاداش روزانه" ||
+      text === "/daily"
+    ) {
+      return doDailyReward(chatId, user);
+    }
+
+    if (
+      text === "چرخ شانس" ||
+      text === "/wheel"
+    ) {
+      return doLuckyWheel(chatId, user);
     }
 
     if (text === "چاق" || text === "/chag") {
