@@ -1,532 +1,597 @@
 
-'use strict';
+const TelegramBot = require("node-telegram-bot-api");
+const mysql = require("mysql2/promise");
 
-const TelegramBot = require('node-telegram-bot-api');
-const mysql = require('mysql2/promise');
+const token = process.env.TELEGRAM_BOT_TOKEN;
 
-// ==============================
-// CONFIGURATION
-// ==============================
-
-const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-
-if (!TOKEN) {
-    console.error('ERROR: TELEGRAM_BOT_TOKEN is missing!');
-    process.exit(1);
+if (!token) {
+  throw new Error("TELEGRAM_BOT_TOKEN is missing!");
 }
 
 const pool = mysql.createPool({
-    host: process.env.DB_HOST,
-    port: Number(process.env.DB_PORT || 3306),
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0
+  host: process.env.DB_HOST,
+  port: Number(process.env.DB_PORT || 3306),
+  database: process.env.DB_NAME,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  waitForConnections: true,
+  connectionLimit: 5,
+  charset: "utf8mb4"
 });
 
-const bot = new TelegramBot(TOKEN, { polling: false });
+const bot = new TelegramBot(token, { polling: false });
 
-const COOLDOWN = 4 * 60 * 1000;
-const XP_REWARD = 15;
+const CHAG_COOLDOWN = 4 * 60 * 1000;
+const CHAG_XP = 15;
+const JOB_XP = 20;
 const MAX_LEVEL = 100;
+const JOBS_PER_PAGE = 10;
 
-const cooldowns = new Map();
-
-// ==============================
-// WELCOME MESSAGE
-// ==============================
-
-const WELCOME = [
-    '🦆 به دنیای چاقال خوش اومدی! 💸',
-    '',
-    'سلام رفیق! 👋😈',
-    '',
-    'اینجا قراره از صفر شروع کنی، پولدار بشی، دارایی جمع کنی و توی دنیای چاقال پیشرفت کنی! 💰',
-    '',
-    'امکانات چاقال:',
-    '',
-    '▫️ 💵 کسب درآمد و جمع‌آوری پول',
-    '▫️ 💼 شغل‌های مختلف و درآمدزایی',
-    '▫️ 🏠 خرید خونه و ساخت زندگی مجازی',
-    '▫️ 🚘 خرید ماشین و جمع‌آوری دارایی',
-    '▫️ 📈 افزایش سطح و پیشرفت',
-    '▫️ 🎲 اتفاقات تصادفی و سرگرمی',
-    '▫️ 🏆 رقابت با بقیه بازیکن‌ها',
-    '',
-    '🔥 این فقط شروع ماجراست؛ قراره کلی امکانات خفن به چاقال اضافه بشه!',
-    '',
-    '📢 کانال رسمی چاقال:',
-    'https://t.me/ChaghalCity',
-    '',
-    '💚 آماده‌ای وارد دنیای چاقال بشی؟'
-].join('\n');
-
-// ==============================
-// HELPERS
-// ==============================
-
-function formatNumber(value) {
-    return Number(value || 0).toLocaleString('en-US');
-}
-
-function playerName(user) {
-    if (user.username) {
-        return '@' + user.username;
-    }
-
-    const name = [user.first_name, user.last_name]
-        .filter(Boolean)
-        .join(' ');
-
-    return name || 'بازیکن';
-}
-
-function isGroup(message) {
-    return message.chat.type === 'group' ||
-        message.chat.type === 'supergroup';
-}
+const jobs = [
+  ["جمع‌کننده زباله",20],
+  ["نظافتچی",30],
+  ["ظرف‌شور",40],
+  ["کارگر ساده",50],
+  ["پخش‌کننده تراکت",60],
+  ["روزنامه‌رسان",70],
+  ["کارگر انبار",80],
+  ["کارگر کارواش",100],
+  ["شاگرد مغازه",120],
+  ["باغبان",150],
+  ["گارسون",180],
+  ["نانوا",200],
+  ["میوه‌فروش",220],
+  ["صندوق‌دار",250],
+  ["پیک موتوری",300],
+  ["آرایشگر",350],
+  ["خیاط",400],
+  ["نگهبان",450],
+  ["راننده تاکسی",500],
+  ["فروشنده",550],
+  ["آشپز",600],
+  ["تعمیرکار دوچرخه",650],
+  ["مکانیک",700],
+  ["برق‌کار",750],
+  ["لوله‌کش",800],
+  ["جوشکار",900],
+  ["تعمیرکار موبایل",1000],
+  ["تعمیرکار کامپیوتر",1100],
+  ["عکاس",1200],
+  ["راننده کامیون",1300],
+  ["معلم",1400],
+  ["مترجم",1500],
+  ["نویسنده",1600],
+  ["حسابدار",1800],
+  ["طراح گرافیک",2000],
+  ["تدوینگر ویدئو",2200],
+  ["برنامه‌نویس مبتدی",2500],
+  ["طراح سایت",2800],
+  ["بازاریاب",3000],
+  ["مدیر فروشگاه",3500],
+  ["مهندس برق",4000],
+  ["مهندس عمران",4500],
+  ["مهندس نرم‌افزار",5000],
+  ["معمار",5500],
+  ["داروساز",6000],
+  ["پزشک",6500],
+  ["دندان‌پزشک",7000],
+  ["وکیل",7500],
+  ["خلبان",8000],
+  ["جراح متخصص",9000],
+  ["مدیر رستوران",10000],
+  ["مدیر هتل",11000],
+  ["مدیر کارخانه",12000],
+  ["مدیر بانک",13000],
+  ["مربی فوتبال",14000],
+  ["فوتبالیست حرفه‌ای",15000],
+  ["بازیگر مشهور",16000],
+  ["خواننده مشهور",17000],
+  ["مجری تلویزیون",18000],
+  ["مهندس هوش مصنوعی",20000],
+  ["صاحب کافه",22000],
+  ["صاحب کارواش",24000],
+  ["صاحب تعمیرگاه",26000],
+  ["صاحب فروشگاه",28000],
+  ["صاحب شرکت ساختمانی",30000],
+  ["صاحب رستوران زنجیره‌ای",32000],
+  ["صاحب شرکت حمل‌ونقل",34000],
+  ["صاحب شرکت نرم‌افزاری",36000],
+  ["صاحب هتل",38000],
+  ["مدیر شرکت بین‌المللی",40000],
+  ["سرمایه‌گذار املاک",42000],
+  ["سازنده برج",44000],
+  ["مالک مجتمع تجاری",46000],
+  ["مالک برند لباس",48000],
+  ["مالک برند خودرو",50000],
+  ["مالک شرکت هواپیمایی",52000],
+  ["مالک شرکت نفتی",54000],
+  ["سرمایه‌گذار بزرگ",56000],
+  ["مالک شرکت فناوری",58000],
+  ["غول فناوری",60000],
+  ["مالک بانک خصوصی",65000],
+  ["مالک شبکه تلویزیونی",70000],
+  ["مالک شرکت فضایی",75000],
+  ["مالک شرکت رباتیک",80000],
+  ["مالک شرکت هوش مصنوعی",85000],
+  ["سرمایه‌دار جهانی",90000],
+  ["مالک شرکت انرژی",95000],
+  ["مالک برند جهانی",100000],
+  ["سلطان تجارت",110000],
+  ["امپراتور اقتصادی",120000],
+  ["ابرسرمایه‌دار",130000],
+  ["مالک امپراتوری صنعتی",140000],
+  ["فرمانروای بازار",150000],
+  ["سلطان سرمایه‌گذاری",160000],
+  ["مالک امپراتوری رسانه‌ای",170000],
+  ["رئیس کنسرسیوم جهانی",180000],
+  ["ثروتمند افسانه‌ای",190000],
+  ["سلطان چاقال",200000],
+  ["امپراتور چاقال",250000],
+  ["فرمانروای چاقال",300000]
+].map((job, index) => ({
+  id: index + 1,
+  name: job[0],
+  salary: job[1],
+  requiredLevel: index + 1
+}));
 
 function xpRequired(level) {
-    if (level >= MAX_LEVEL) {
-        return 0;
-    }
+  if (level <= 8) return 50 * Math.pow(2, level - 1);
+  if (level === 9) return 6500;
+  if (level === 10) return 8000;
 
-    if (level <= 8) {
-        return 50 * Math.pow(2, level - 1);
-    }
-
-    if (level === 9) {
-        return 6500;
-    }
-
-    if (level === 10) {
-        return 8000;
-    }
-
-    let required = 8000;
-
-    for (let current = 10; current < level; current++) {
-        required += 2000 + 500 * (current - 10);
-    }
-
-    return required;
+  return 8000 + (level - 10) * 2000 +
+    (level - 10) * (level - 9) * 250;
 }
 
-function getRank(level) {
-    if (level >= 100) return '👑 فرمانروای چاقال';
-    if (level >= 91) return '🌌 تایتان';
-    if (level >= 81) return '⚡ اسطوره';
-    if (level >= 71) return '🐉 افسانه‌ای';
-    if (level >= 61) return '💰 سرمایه‌دار';
-    if (level >= 51) return '👑 رئیس';
-    if (level >= 41) return '🔥 استاد';
-    if (level >= 31) return '💎 نخبه';
-    if (level >= 21) return '🥇 حرفه‌ای';
-    if (level >= 11) return '🥈 تلاشگر';
-    if (level >= 6) return '🥉 مبتدی';
-
-    return '🪶 تازه‌وارد';
+function formatNumber(number) {
+  return Number(number).toLocaleString("en-US");
 }
-
-// ==============================
-// DATABASE SETUP
-// Does not delete existing balances
-// ==============================
 
 async function setupDatabase() {
-    const createTableSQL = [
-        'CREATE TABLE IF NOT EXISTS chaghal_players (',
-        'user_id BIGINT NOT NULL PRIMARY KEY,',
-        'username VARCHAR(255) DEFAULT NULL,',
-        'balance BIGINT NOT NULL DEFAULT 0,',
-        'last_chag_at BIGINT NOT NULL DEFAULT 0,',
-        'level INT NOT NULL DEFAULT 1,',
-        'xp BIGINT NOT NULL DEFAULT 0',
-        ')'
-    ].join(' ');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chaghal_players (
+      user_id BIGINT PRIMARY KEY,
+      username VARCHAR(255),
+      balance BIGINT NOT NULL DEFAULT 0,
+      last_chag_at BIGINT NOT NULL DEFAULT 0,
+      level INT NOT NULL DEFAULT 1,
+      xp BIGINT NOT NULL DEFAULT 0,
+      job_id INT DEFAULT NULL
+    )
+  `);
 
-    await pool.query(createTableSQL);
+  // افزودن ستون‌ها به جدول قدیمی بدون پاک کردن موجودی‌ها
+  const columns = [
+    ["level", "INT NOT NULL DEFAULT 1"],
+    ["xp", "BIGINT NOT NULL DEFAULT 0"],
+    ["job_id", "INT DEFAULT NULL"]
+  ];
 
-    const result = await pool.query(
-        'SHOW COLUMNS FROM chaghal_players'
-    );
-
-    const columns = result[0].map(function (column) {
-        return column.Field;
-    });
-
-    if (!columns.includes('level')) {
-        await pool.query(
-            'ALTER TABLE chaghal_players ADD COLUMN level INT NOT NULL DEFAULT 1'
-        );
-    }
-
-    if (!columns.includes('xp')) {
-        await pool.query(
-            'ALTER TABLE chaghal_players ADD COLUMN xp BIGINT NOT NULL DEFAULT 0'
-        );
-    }
-
-    console.log('Chaghal database is ready!');
-}
-
-// ==============================
-// PLAYER HELPERS
-// ==============================
-
-async function ensurePlayer(user) {
-    const userId = String(user.id);
-
-    await pool.query(
-        'INSERT IGNORE INTO chaghal_players ' +
-        '(user_id, username, balance, last_chag_at, level, xp) ' +
-        'VALUES (?, ?, 0, 0, 1, 0)',
-        [userId, user.username || null]
-    );
-
-    await pool.query(
-        'UPDATE chaghal_players SET username = ? WHERE user_id = ?',
-        [user.username || null, userId]
-    );
-
-    const result = await pool.query(
-        'SELECT user_id, username, balance, last_chag_at, level, xp ' +
-        'FROM chaghal_players WHERE user_id = ?',
-        [userId]
-    );
-
-    return result[0][0];
-}
-
-// ==============================
-// /START
-// ==============================
-
-bot.onText(/^\/start(?:@\w+)?(?:\s|$)/, async function (message) {
+  for (const [name, definition] of columns) {
     try {
-        await bot.sendMessage(message.chat.id, WELCOME);
+      await pool.query(
+        `ALTER TABLE chaghal_players ADD COLUMN ${name} ${definition}`
+      );
     } catch (error) {
-        console.error('Start error:', error.message);
+      if (error.code !== "ER_DUP_FIELDNAME") throw error;
     }
-});
+  }
 
-// ==============================
-// MESSAGE HANDLER
-// ==============================
+  console.log("Chaghal database ready.");
+}
 
-bot.on('message', async function (message) {
-    if (!message.from || message.from.is_bot || !message.text) {
-        return;
+async function getPlayer(user) {
+  const id = String(user.id);
+  const username = user.username || user.first_name || "Player";
+
+  await pool.query(
+    `INSERT INTO chaghal_players (user_id, username)
+     VALUES (?, ?)
+     ON DUPLICATE KEY UPDATE username = VALUES(username)`,
+    [id, username]
+  );
+
+  const [rows] = await pool.query(
+    "SELECT * FROM chaghal_players WHERE user_id = ?",
+    [id]
+  );
+
+  return rows[0];
+}
+
+async function addXP(userId, amount) {
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [rows] = await connection.query(
+      "SELECT level, xp FROM chaghal_players WHERE user_id = ? FOR UPDATE",
+      [String(userId)]
+    );
+
+    if (!rows.length) {
+      await connection.rollback();
+      return null;
     }
 
-    if (!isGroup(message)) {
-        return;
+    let level = Number(rows[0].level) || 1;
+    let xp = Number(rows[0].xp) || 0;
+
+    xp += amount;
+
+    while (level < MAX_LEVEL && xp >= xpRequired(level)) {
+      xp -= xpRequired(level);
+      level++;
     }
 
-    const text = message.text.trim();
-
-    if (!['چاق', 'موجودی', 'لول', 'رنک'].includes(text)) {
-        return;
+    if (level >= MAX_LEVEL) {
+      level = MAX_LEVEL;
+      xp = 0;
     }
+
+    await connection.query(
+      "UPDATE chaghal_players SET level = ?, xp = ? WHERE user_id = ?",
+      [level, xp, String(userId)]
+    );
+
+    await connection.commit();
+    return { level, xp };
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+function jobKeyboard(page, player) {
+  const start = (page - 1) * JOBS_PER_PAGE;
+  const pageJobs = jobs.slice(start, start + JOBS_PER_PAGE);
+  const level = Number(player.level) || 1;
+  const selectedJob = Number(player.job_id) || 0;
+
+  const keyboard = pageJobs.map(job => {
+    const unlocked = level >= job.requiredLevel;
+    const selected = selectedJob === job.id;
+
+    const icon = selected ? "⭐" : unlocked ? "🟩" : "🟥";
+    const status = selected ? " انتخاب‌شده" :
+      unlocked ? "" : ` 🔒 لول ${job.requiredLevel}`;
+
+    const label =
+      `${icon} ${job.id}. ${job.name} | ${formatNumber(job.salary)}${status}`;
+
+    return [{
+      text: label,
+      callback_data: unlocked
+        ? `jobselect:${job.id}`
+        : `joblocked:${job.id}`
+    }];
+  });
+
+  const nav = [];
+  if (page > 1) {
+    nav.push({ text: "⬅️ قبلی", callback_data: `jobpage:${page - 1}` });
+  }
+
+  nav.push({
+    text: `${page}/10`,
+    callback_data: "jobnoop"
+  });
+
+  if (page < 10) {
+    nav.push({ text: "بعدی ➡️", callback_data: `jobpage:${page + 1}` });
+  }
+
+  keyboard.push(nav);
+
+  return { inline_keyboard: keyboard };
+}
+
+async function showJobs(chatId, user, page, messageId = null) {
+  const player = await getPlayer(user);
+  const safePage = Math.max(1, Math.min(10, page));
+
+  const currentJob = jobs.find(j => j.id === Number(player.job_id));
+  const text = [
+    "💼 <b>مرکز شغل‌های چاقال</b>",
+    "",
+    `👤 بازیکن: ${escapeHTML(user.first_name || "بازیکن")}`,
+    `📊 لول فعلی: ${player.level}`,
+    `💰 پول فعلی: ${formatNumber(player.balance)} سکه`,
+    `💼 شغل فعلی: ${currentJob ? escapeHTML(currentJob.name) : "بدون شغل"}`,
+    "",
+    "🟩 شغل قابل انتخاب",
+    "🟥 شغل قفل‌شده",
+    "⭐ شغل انتخاب‌شده",
+    "",
+    `📄 صفحه ${safePage} از 10`,
+    "برای انتخاب، روی شغل سبز بزن."
+  ].join("\n");
+
+  const options = {
+    parse_mode: "HTML",
+    reply_markup: jobKeyboard(safePage, player)
+  };
+
+  if (messageId) {
+    try {
+      await bot.editMessageText(text, {
+        ...options,
+        chat_id: chatId,
+        message_id: messageId
+      });
+    } catch (error) {
+      if (!String(error.message).includes("message is not modified")) {
+        console.error("Edit jobs menu error:", error.message);
+      }
+    }
+  } else {
+    await bot.sendMessage(chatId, text, options);
+  }
+}
+
+function escapeHTML(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+bot.on("message", async message => {
+  try {
+    if (!message.from || message.from.is_bot) return;
+
+    const text = (message.text || "").trim();
+    if (!text) return;
 
     const chatId = message.chat.id;
     const user = message.from;
 
-    try {
-        const player = await ensurePlayer(user);
-
-        // ------------------------------
-        // BALANCE
-        // ------------------------------
-
-        if (text === 'موجودی') {
-            const reply = [
-                '💰 کیف پول چاقال',
-                '',
-                '👤 بازیکن: ' + playerName(user),
-                '💵 موجودی: ' + formatNumber(player.balance) + ' سکه',
-                '🏦 بانک: 0 سکه',
-                '💎 اشتراک: ندارد'
-            ].join('\n');
-
-            await bot.sendMessage(chatId, reply, {
-                reply_to_message_id: message.message_id
-            });
-
-            return;
-        }
-
-        // ------------------------------
-        // LEVEL
-        // ------------------------------
-
-        if (text === 'لول') {
-            const level = Number(player.level) || 1;
-            const xp = Number(player.xp) || 0;
-
-            if (level >= MAX_LEVEL) {
-                const reply = [
-                    '📈 اطلاعات سطح',
-                    '',
-                    '👤 بازیکن: ' + playerName(user),
-                    '⭐ لول: 100 / 100',
-                    '✨ XP: ' + formatNumber(xp),
-                    '👑 رتبه: ' + getRank(level),
-                    '',
-                    '🔥 به بالاترین لول رسیدی!'
-                ].join('\n');
-
-                await bot.sendMessage(chatId, reply, {
-                    reply_to_message_id: message.message_id
-                });
-
-                return;
-            }
-
-            const required = xpRequired(level);
-            const remaining = Math.max(0, required - xp);
-            const progress = Math.min(
-                10,
-                Math.floor((xp / required) * 10)
-            );
-
-            const bar = '🟩'.repeat(progress) +
-                '⬜'.repeat(10 - progress);
-
-            const reply = [
-                '📈 اطلاعات سطح',
-                '',
-                '👤 بازیکن: ' + playerName(user),
-                '⭐ لول: ' + level + ' / ' + MAX_LEVEL,
-                '✨ XP: ' + formatNumber(xp) +
-                    ' / ' + formatNumber(required),
-                '',
-                bar,
-                '',
-                '🎯 XP تا لول بعدی: ' + formatNumber(remaining),
-                '🏆 رتبه: ' + getRank(level)
-            ].join('\n');
-
-            await bot.sendMessage(chatId, reply, {
-                reply_to_message_id: message.message_id
-            });
-
-            return;
-        }
-
-        // ------------------------------
-        // RANK
-        // ------------------------------
-
-        if (text === 'رنک') {
-            const level = Number(player.level) || 1;
-
-            const reply = [
-                '🏆 رتبه بازیکن',
-                '',
-                '👤 بازیکن: ' + playerName(user),
-                '⭐ لول: ' + level + ' / ' + MAX_LEVEL,
-                '🎖 رتبه: ' + getRank(level),
-                '✨ XP: ' + formatNumber(player.xp)
-            ].join('\n');
-
-            await bot.sendMessage(chatId, reply, {
-                reply_to_message_id: message.message_id
-            });
-
-            return;
-        }
-
-        // ------------------------------
-        // CHAG
-        // ------------------------------
-
-        if (text === 'چاق') {
-            const userId = String(user.id);
-            const now = Date.now();
-            const lastFromMemory = cooldowns.get(userId) || 0;
-            const lastFromDatabase = Number(player.last_chag_at) || 0;
-            const lastTime = Math.max(lastFromMemory, lastFromDatabase);
-            const elapsed = now - lastTime;
-
-            if (elapsed < COOLDOWN) {
-                const seconds = Math.ceil(
-                    (COOLDOWN - elapsed) / 1000
-                );
-
-                const minutesLeft = Math.floor(seconds / 60);
-                const secondsLeft = seconds % 60;
-
-                await bot.sendMessage(
-                    chatId,
-                    '⏳ ' + playerName(user) +
-                    '، برای چاق بعدی ' +
-                    minutesLeft + ' دقیقه و ' +
-                    secondsLeft + ' ثانیه صبر کن!',
-                    {
-                        reply_to_message_id: message.message_id
-                    }
-                );
-
-                return;
-            }
-
-            const connection = await pool.getConnection();
-
-            let reward = 0;
-            let newBalance = 0;
-            let newLevel = 1;
-            let newXp = 0;
-            let levelUp = false;
-
-            try {
-                await connection.beginTransaction();
-
-                const result = await connection.query(
-                    'SELECT balance, level, xp, last_chag_at ' +
-                    'FROM chaghal_players WHERE user_id = ? FOR UPDATE',
-                    [userId]
-                );
-
-                if (result[0].length === 0) {
-                    throw new Error('Player not found');
-                }
-
-                const current = result[0][0];
-                const transactionNow = Date.now();
-                const databaseLastTime =
-                    Number(current.last_chag_at) || 0;
-
-                if (transactionNow - databaseLastTime < COOLDOWN) {
-                    await connection.rollback();
-
-                    const seconds = Math.ceil(
-                        (COOLDOWN -
-                            (transactionNow - databaseLastTime)) / 1000
-                    );
-
-                    await bot.sendMessage(
-                        chatId,
-                        '⏳ هنوز باید ' + seconds +
-                        ' ثانیه صبر کنی!',
-                        {
-                            reply_to_message_id: message.message_id
-                        }
-                    );
-
-                    return;
-                }
-
-                reward = Math.floor(Math.random() * 11) + 20;
-                newBalance = Number(current.balance) + reward;
-                newLevel = Number(current.level) || 1;
-                newXp = Number(current.xp) || 0;
-
-                if (newLevel < MAX_LEVEL) {
-                    newXp += XP_REWARD;
-
-                    while (
-                        newLevel < MAX_LEVEL &&
-                        newXp >= xpRequired(newLevel)
-                    ) {
-                        newXp -= xpRequired(newLevel);
-                        newLevel++;
-                        levelUp = true;
-                    }
-
-                    if (newLevel >= MAX_LEVEL) {
-                        newXp = 0;
-                    }
-                }
-
-                await connection.query(
-                    'UPDATE chaghal_players ' +
-                    'SET balance = ?, xp = ?, level = ?, ' +
-                    'last_chag_at = ?, username = ? ' +
-                    'WHERE user_id = ?',
-                    [
-                        newBalance,
-                        newXp,
-                        newLevel,
-                        transactionNow,
-                        user.username || null,
-                        userId
-                    ]
-                );
-
-                await connection.commit();
-                cooldowns.set(userId, transactionNow);
-            } catch (error) {
-                try {
-                    await connection.rollback();
-                } catch (rollbackError) {
-                    console.error('Rollback error:', rollbackError.message);
-                }
-
-                throw error;
-            } finally {
-                connection.release();
-            }
-
-            const response = [
-                '💸 ' + playerName(user) + ' چاق زد!',
-                '',
-                '💰 درآمد: +' + formatNumber(reward) + ' سکه',
-                '👛 موجودی جدید: ' + formatNumber(newBalance) + ' سکه',
-                '✨ XP دریافتی: +' + XP_REWARD,
-                '⭐ لول فعلی: ' + newLevel + ' / ' + MAX_LEVEL,
-                '🏆 رتبه: ' + getRank(newLevel)
-            ];
-
-            if (levelUp) {
-                response.push('');
-                response.push('🎉 تبریک! لولت افزایش پیدا کرد!');
-            }
-
-            if (newLevel >= MAX_LEVEL) {
-                response.push('');
-                response.push('👑 به بالاترین لول چاقال رسیدی!');
-            }
-
-            await bot.sendMessage(chatId, response.join('\n'), {
-                reply_to_message_id: message.message_id
-            });
-        }
-    } catch (error) {
-        console.error('Message handler error:', error);
-
-        try {
-            await bot.sendMessage(
-                chatId,
-                '❌ یه خطا پیش اومد. لطفاً دوباره تلاش کن.'
-            );
-        } catch (sendError) {
-            console.error('Send error:', sendError.message);
-        }
+    if (text === "/start" || text.startsWith("/start ")) {
+      await getPlayer(user);
+      return bot.sendMessage(
+        chatId,
+        [
+          "🎉 به ربات چاقال خوش اومدی!",
+          "",
+          "برای استفاده از امکانات اقتصادی، ربات رو به گروهت اضافه کن.",
+          "",
+          "💼 کار — دیدن ۱۰۰ شغل",
+          "🪙 چاق — پول و XP بگیر",
+          "💰 موجودی — دیدن پولت",
+          "⭐ لول — دیدن لول و XP",
+          "🏆 رنک — دیدن رتبه‌ات"
+        ].join("\n")
+      );
     }
+
+    if (text === "کار" || text === "/jobs") {
+      return showJobs(chatId, user, 1);
+    }
+
+    if (text === "موجودی" || text === "/balance") {
+      const player = await getPlayer(user);
+      return bot.sendMessage(
+        chatId,
+        `💰 موجودی شما: ${formatNumber(player.balance)} سکه`
+      );
+    }
+
+    if (text === "لول" || text === "/level") {
+      const player = await getPlayer(user);
+      return bot.sendMessage(
+        chatId,
+        [
+          `⭐ لول: ${player.level}`,
+          `✨ XP: ${formatNumber(player.xp)}/${formatNumber(xpRequired(Number(player.level)))}`,
+          `💼 شغل: ${jobs.find(j => j.id === Number(player.job_id))?.name || "بدون شغل"}`
+        ].join("\n")
+      );
+    }
+
+    if (text === "رنک" || text === "/rank") {
+      const player = await getPlayer(user);
+      const level = Number(player.level);
+      let rank = "🪶 تازه‌وارد";
+
+      if (level >= 100) rank = "👑 فرمانروای چاقال";
+      else if (level >= 91) rank = "🌌 تایتان";
+      else if (level >= 81) rank = "⚡ اسطوره";
+      else if (level >= 71) rank = "🐉 افسانه‌ای";
+      else if (level >= 61) rank = "💰 سرمایه‌دار";
+      else if (level >= 51) rank = "👑 رئیس";
+      else if (level >= 41) rank = "🔥 استاد";
+      else if (level >= 31) rank = "💎 نخبه";
+      else if (level >= 21) rank = "🥇 حرفه‌ای";
+      else if (level >= 11) rank = "🥈 تلاشگر";
+      else if (level >= 6) rank = "🥉 مبتدی";
+
+      return bot.sendMessage(chatId, `🏆 رتبه شما: ${rank}`);
+    }
+
+    if (text === "چاق" || text === "/chag") {
+      const player = await getPlayer(user);
+      const now = Date.now();
+      const last = Number(player.last_chag_at) || 0;
+      const remaining = CHAG_COOLDOWN - (now - last);
+
+      if (remaining > 0) {
+        const seconds = Math.ceil(remaining / 1000);
+        return bot.sendMessage(
+          chatId,
+          `⏳ داش، ${seconds} ثانیه دیگه دوباره امتحان کن!`
+        );
+      }
+
+      const coins = Math.floor(Math.random() * 11) + 20;
+
+      const [result] = await pool.query(
+        `UPDATE chaghal_players
+         SET balance = balance + ?, last_chag_at = ?
+         WHERE user_id = ? AND last_chag_at = ?`,
+        [coins, now, String(user.id), last]
+      );
+
+      if (result.affectedRows === 0) {
+        return bot.sendMessage(chatId, "⏳ یه لحظه صبر کن و دوباره بزن!");
+      }
+
+      const updated = await addXP(user.id, CHAG_XP);
+      const [rows] = await pool.query(
+        "SELECT balance FROM chaghal_players WHERE user_id = ?",
+        [String(user.id)]
+      );
+
+      return bot.sendMessage(
+        chatId,
+        [
+          `🎉 تبریک چاقال! ${coins} سکه گرفتی!`,
+          `💰 پول فعلی: ${formatNumber(rows[0].balance)} سکه`,
+          `✨ XP: +${CHAG_XP} (مجموع XP: ${formatNumber(updated?.xp || 0)})`
+        ].join("\n")
+      );
+    }
+  } catch (error) {
+    console.error("Message handler error:", error);
+    await bot.sendMessage(message.chat.id, "❌ یه خطا پیش اومد؛ دوباره امتحان کن.");
+  }
 });
 
-// ==============================
-// STARTUP
-// ==============================
+bot.on("callback_query", async query => {
+  const data = query.data || "";
+  const chatId = query.message?.chat.id;
+  const messageId = query.message?.message_id;
+  const user = query.from;
+
+  try {
+    if (!chatId || !messageId) {
+      return bot.answerCallbackQuery(query.id);
+    }
+
+    if (data === "jobnoop") {
+      return bot.answerCallbackQuery(query.id);
+    }
+
+    if (data.startsWith("jobpage:")) {
+      const page = Number(data.split(":")[1]);
+      await bot.answerCallbackQuery(query.id);
+      return showJobs(chatId, user, page, messageId);
+    }
+
+    if (data.startsWith("joblocked:")) {
+      const jobId = Number(data.split(":")[1]);
+      const job = jobs.find(j => j.id === jobId);
+
+      await bot.answerCallbackQuery(query.id, {
+        text: `🔒 برای این شغل باید لول ${job?.requiredLevel || "بالاتر"} باشی.`,
+        show_alert: true
+      });
+      return;
+    }
+
+    if (data.startsWith("jobselect:")) {
+      const jobId = Number(data.split(":")[1]);
+      const job = jobs.find(j => j.id === jobId);
+
+      if (!job) {
+        return bot.answerCallbackQuery(query.id, {
+          text: "این شغل وجود نداره!",
+          show_alert: true
+        });
+      }
+
+      const player = await getPlayer(user);
+
+      if (Number(player.level) < job.requiredLevel) {
+        return bot.answerCallbackQuery(query.id, {
+          text: `لول ${job.requiredLevel} لازمه!`,
+          show_alert: true
+        });
+      }
+
+      if (Number(player.job_id) === job.id) {
+        return bot.answerCallbackQuery(query.id, {
+          text: "این شغل رو از قبل انتخاب کردی!",
+          show_alert: true
+        });
+      }
+
+      const connection = await pool.getConnection();
+      let updated;
+
+      try {
+        await connection.beginTransaction();
+
+        const [rows] = await connection.query(
+          "SELECT level, job_id FROM chaghal_players WHERE user_id = ? FOR UPDATE",
+          [String(user.id)]
+        );
+
+        if (!rows.length || Number(rows[0].level) < job.requiredLevel) {
+          await connection.rollback();
+          return bot.answerCallbackQuery(query.id, {
+            text: "لول کافی نداری!",
+            show_alert: true
+          });
+        }
+
+        await connection.query(
+          "UPDATE chaghal_players SET job_id = ? WHERE user_id = ?",
+          [job.id, String(user.id)]
+        );
+
+        await connection.commit();
+        updated = await addXP(user.id, JOB_XP);
+      } catch (error) {
+        await connection.rollback();
+        throw error;
+      } finally {
+        connection.release();
+      }
+
+      await bot.answerCallbackQuery(query.id, {
+        text: `⭐ شغل ${job.name} انتخاب شد!`
+      });
+
+      await bot.sendMessage(
+        chatId,
+        [
+          `🎉 تبریک! شما به شغل «${job.name}» مشغول شدید!`,
+          `💰 حقوق هر بار کار: ${formatNumber(job.salary)} سکه`,
+          `✨ ${JOB_XP} XP دریافت کردی!`,
+          `📊 XP فعلی: ${formatNumber(updated?.xp || 0)}`
+        ].join("\n")
+      );
+
+      return showJobs(chatId, user, Math.ceil(job.id / JOBS_PER_PAGE), messageId);
+    }
+
+    await bot.answerCallbackQuery(query.id);
+  } catch (error) {
+    console.error("Callback handler error:", error);
+    try {
+      await bot.answerCallbackQuery(query.id, {
+        text: "خطا پیش اومد؛ دوباره امتحان کن.",
+        show_alert: true
+      });
+    } catch (_) {}
+  }
+});
 
 async function start() {
-    try {
-        await setupDatabase();
-
-        await bot.startPolling();
-
-        console.log('🦆 ChaghalBot is running!');
-    } catch (error) {
-        console.error('Startup error:', error);
-        process.exit(1);
-    }
+  await setupDatabase();
+  await bot.startPolling();
+  console.log("Chaghal bot started successfully!");
 }
 
-bot.on('polling_error', function (error) {
-    console.error('Telegram polling error:', error.message);
+bot.on("polling_error", error => {
+  console.error("Telegram polling error:", error.message);
 });
 
-start();
+start().catch(error => {
+  console.error("Bot startup failed:", error);
+  process.exit(1);
+});
