@@ -616,6 +616,152 @@ async function doWork(chatId, user) {
   await notifyLevelUp(chatId, updated);
 }
 
+async function transferMoney(chatId, sender, recipient, amount) {
+  if (!recipient || recipient.is_bot) {
+    return bot.sendMessage(chatId, "❌ گیرنده معتبر نیست.");
+  }
+
+  if (String(sender.id) === String(recipient.id)) {
+    return bot.sendMessage(chatId, "❌ نمی‌تونی به خودت پول انتقال بدی!");
+  }
+
+  if (!Number.isSafeInteger(amount) || amount <= 0) {
+    return bot.sendMessage(chatId, "❌ مبلغ باید عدد مثبت باشه.");
+  }
+
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    // قفل‌کردن هر دو حساب برای جلوگیری از انتقال هم‌زمان ناسازگار
+    const ids = [String(sender.id), String(recipient.id)].sort();
+
+    const [rows] = await connection.query(
+      `SELECT user_id, balance
+       FROM chaghal_players
+       WHERE user_id IN (?, ?)
+       ORDER BY user_id
+       FOR UPDATE`,
+      ids
+    );
+
+    const senderRow = rows.find(
+      row => String(row.user_id) === String(sender.id)
+    );
+
+    const recipientRow = rows.find(
+      row => String(row.user_id) === String(recipient.id)
+    );
+
+    if (!senderRow || !recipientRow) {
+      await connection.rollback();
+
+      return bot.sendMessage(
+        chatId,
+        "❌ هر دو بازیکن باید قبلاً با دستور /start در چاقال ثبت شده باشن."
+      );
+    }
+
+    const balance = Number(senderRow.balance);
+    const recipientBalance = Number(recipientRow.balance);
+
+    if (
+      !Number.isSafeInteger(balance) ||
+      !Number.isSafeInteger(recipientBalance) ||
+      balance < amount
+    ) {
+      await connection.rollback();
+
+      return bot.sendMessage(
+        chatId,
+        `❌ موجودی کافی نداری!\n💰 موجودی تو: ${fmt(senderRow.balance)} سکه`
+      );
+    }
+
+    if (recipientBalance + amount > 9007199254740991) {
+      await connection.rollback();
+
+      return bot.sendMessage(
+        chatId,
+        "❌ موجودی گیرنده بعد از انتقال بیش از حد مجاز می‌شه."
+      );
+    }
+
+    const [debit] = await connection.query(
+      `UPDATE chaghal_players
+       SET balance = balance - ?
+       WHERE user_id = ? AND balance >= ?`,
+      [amount, String(sender.id), amount]
+    );
+
+    if (debit.affectedRows !== 1) {
+      await connection.rollback();
+
+      return bot.sendMessage(
+        chatId,
+        "❌ انتقال انجام نشد؛ موجودی رو بررسی کن و دوباره تلاش کن."
+      );
+    }
+
+    const [credit] = await connection.query(
+      `UPDATE chaghal_players
+       SET balance = balance + ?
+       WHERE user_id = ?`,
+      [amount, String(recipient.id)]
+    );
+
+    if (credit.affectedRows !== 1) {
+      throw new Error("Recipient balance update failed");
+    }
+
+    await connection.commit();
+
+    const [updatedRows] = await pool.query(
+      `SELECT user_id, balance
+       FROM chaghal_players
+       WHERE user_id IN (?, ?)`,
+      [String(sender.id), String(recipient.id)]
+    );
+
+    const updatedSender = updatedRows.find(
+      row => String(row.user_id) === String(sender.id)
+    );
+
+    const updatedRecipient = updatedRows.find(
+      row => String(row.user_id) === String(recipient.id)
+    );
+
+    const senderName = escapeHTML(
+      sender.first_name || sender.username || "بازیکن"
+    );
+
+    const recipientName = escapeHTML(
+      recipient.first_name || recipient.username || "بازیکن"
+    );
+
+    return bot.sendMessage(
+      chatId,
+      [
+        "💸 <b>انتقال پول موفق بود!</b>",
+        "",
+        `👤 فرستنده: ${senderName}`,
+        `👤 گیرنده: ${recipientName}`,
+        `💰 مبلغ: ${fmt(amount)} سکه`,
+        "",
+        `💵 موجودی فرستنده: ${fmt(updatedSender.balance)} سکه`,
+        `💵 موجودی گیرنده: ${fmt(updatedRecipient.balance)} سکه`
+      ].join("\n"),
+      { parse_mode: "HTML" }
+    );
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
 bot.on("message", async message => {
   try {
     if (!message.from || message.from.is_bot) return;
@@ -625,6 +771,26 @@ bot.on("message", async message => {
 
     const chatId = message.chat.id;
     const user = message.from;
+	
+	const transferMatch = text.match(/^انتقال پول\s+(\d+)$/);
+
+if (transferMatch) {
+  if (!message.reply_to_message?.from) {
+    return bot.sendMessage(
+      chatId,
+      "❌ برای انتقال پول باید روی پیام گیرنده ریپلای کنی!\n\nمثال: انتقال پول 5000"
+    );
+  }
+
+  const amount = Number(transferMatch[1]);
+
+  return transferMoney(
+    chatId,
+    user,
+    message.reply_to_message.from,
+    amount
+  );
+}
 
     if (text === "/start" || text.startsWith("/start ")) {
       await getPlayer(user);
